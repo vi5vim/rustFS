@@ -36,22 +36,20 @@ Planned:
 
 ## Requirements
 
-- **macOS** (only supported platform for now).
-- **Rust** (2024 edition; tested on 1.96).
-- **[macFUSE](https://macfuse.io/) 4.x+**.
+- **macOS**
+- **[macFUSE](https://macfuse.io/) 4.x+**
 
 ## Installation (macOS)
 
-1. **Install macFUSE.** Easiest via Homebrew:
+1. **Install macFUSE** via Homebrew:
    ```bash
    brew install --cask macfuse
    ```
-   (Or download the installer from https://macfuse.io/.)
+   (Or download the installer at https://macfuse.io/)
 
-2. **Approve the macFUSE kernel extension.** This is a one-time step and is what
-   most "it won't mount" problems come down to:
-   - Open **System Settings → Privacy & Security**, find the blocked software from
-     developer *"Benjamin Fleischer"*, and click **Allow**.
+2. **Approve macFUSE kernel extension**
+   - Open **System Settings → Privacy & Security**, find blocked software from
+     *"Benjamin Fleischer"*, and click **Allow**.
    - On Apple Silicon you may first need to enable kext loading: reboot into
      **Recovery** (hold the power button on startup) → **Startup Security Utility** →
      select your disk → **Reduced Security** → check *"Allow user management of kernel
@@ -67,7 +65,7 @@ Planned:
 ## Usage
 
 ```bash
-# Create a mountpoint and mount the filesystem (this call runs in the foreground):
+# Create a mountpoint and mount the filesystem:
 mkdir -p /tmp/rfs
 cargo run -- /tmp/rfs
 
@@ -76,7 +74,7 @@ ls -la /tmp/rfs          # -> hello.txt
 cat /tmp/rfs/hello.txt   # -> Hello from rustFS!
 
 # Unmount when done:
-umount /tmp/rfs          # or press Ctrl-C in the terminal running rustFS
+umount /tmp/rfs          # or ctrl+c
 ```
 
 ## License

@@ -5,8 +5,8 @@ via the [`fuser`](https://crates.io/crates/fuser) crate. Built to deepen underst
 of filesystem internals — inodes, directory entries, the VFS/kernel handoff — while
 producing something you can actually mount and use.
 
-> **Status:** early / educational. Currently a minimal **read-only** filesystem that
-> mounts and serves a single file. See the roadmap below.
+> **Status:** Currently a minimal **read-only** filesystem that
+> mounts and serves a single file. See roadmap below.
 
 ## Currently implemented
 

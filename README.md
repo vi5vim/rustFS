@@ -5,34 +5,50 @@ via the [`fuser`](https://crates.io/crates/fuser) crate. Built to deepen underst
 of filesystem internals — inodes, directory entries, the VFS/kernel handoff — while
 producing something you can actually mount and use.
 
-> **Status:** Currently a minimal **read-only** filesystem that
-> mounts and serves a single file. See roadmap below.
+> **Status:** A working **read-write, in-memory** filesystem — create, write,
+> `mkdir`, rename, and delete all work. State lives in RAM and is gone on
+> unmount (persistence is the next milestone). See roadmap below.
 
 ## Currently implemented
 
 - Mounts a real FUSE filesystem at a given mountpoint (`cargo run -- <mountpoint>`).
-- A read-only root directory containing one file, `hello.txt`.
-- The core read-path FUSE operations:
-  - `lookup` — resolve a name in a directory to an inode.
-  - `getattr` — report inode attributes (the FS-level `stat`).
-  - `readdir` — list directory contents (including `.` and `..`).
-  - `read` — return file contents, honoring the read offset.
-- Verified end-to-end on macOS (macFUSE): `ls` and `cat` against the mount work.
+- An inode table + per-directory entry map (files and nested directories).
+- **Read path:** `lookup`, `getattr`, `readdir` (with `.`/`..`), `read`.
+- **Write path:** `create`, `write` (with zero-filled gaps), `setattr` (truncate,
+  chmod, timestamps), `mkdir`, `unlink`, `rmdir`, `rename` (including across
+  directories), with proper error codes (`EEXIST`, `ENOTEMPTY`, `EISDIR`, …).
+- Unit tests covering the filesystem semantics, runnable without mounting
+  (`cargo test`).
+- Verified end-to-end on macOS (macFUSE).
+
+## Architecture
+
+```
+src/
+├── main.rs    # parse the mountpoint arg, start the FUSE session
+├── inode.rs   # the data model AND filesystem semantics (+ unit tests)
+└── fs.rs      # thin FUSE glue: locks state, calls inode.rs, forms replies
+```
+
+`inode.rs` is deliberately FUSE-free: each operation is a plain method on
+`FsState` returning `Result<_, Errno>`, so the logic is unit-testable in
+isolation. `fs.rs` only translates between the kernel's protocol and those
+methods.
 
 ## Roadmap
 
-Planned:
-
-- [ ] **Read-write in-memory FS** — a real inode table + directory map instead of
-      hardcoded entries.
-- [ ] File/dir creation & removal: `create`, `mkdir`, `unlink`, `rmdir`, `rename`.
-- [ ] `write` and `setattr` (including truncate).
-- [ ] Multiple files and nested directories.
+- [x] **Read-write in-memory FS** — a real inode table + directory map.
+- [x] File/dir creation & removal: `create`, `mkdir`, `unlink`, `rmdir`, `rename`.
+- [x] `write` and `setattr` (including truncate).
+- [x] Multiple files and nested directories.
+- [x] Unit tests for the data model.
 - [ ] Symlinks (`symlink` / `readlink`).
+- [ ] Per-open file handles (proper `open`/`release`, `O_APPEND`).
+- [ ] `nlink` bookkeeping for directory renames across parents.
 - [ ] Persistence — back the FS with an on-disk format rather than RAM.
 - [ ] Permissions / ownership enforcement.
 - [ ] Linux support (libfuse) alongside macOS.
-- [ ] Tests and benchmarks.
+- [ ] Benchmarks.
 
 ## Requirements
 
@@ -69,12 +85,25 @@ Planned:
 mkdir -p /tmp/rfs
 cargo run -- /tmp/rfs
 
-# In another terminal:
-ls -la /tmp/rfs          # -> hello.txt
-cat /tmp/rfs/hello.txt   # -> Hello from rustFS!
+# In another terminal — it's a real read-write filesystem:
+ls -la /tmp/rfs                 # -> hello.txt (seeded)
+cat /tmp/rfs/hello.txt          # -> Hello from rustFS!
+echo "it works" > /tmp/rfs/a.txt
+cat /tmp/rfs/a.txt              # -> it works
+mkdir /tmp/rfs/sub
+mv /tmp/rfs/a.txt /tmp/rfs/sub/
+rm /tmp/rfs/sub/a.txt && rmdir /tmp/rfs/sub
 
 # Unmount when done:
-umount /tmp/rfs          # or ctrl+c
+umount /tmp/rfs                 # or ctrl+c
+```
+
+## Testing
+
+The filesystem semantics are unit-tested without needing to mount:
+
+```bash
+cargo test
 ```
 
 ## License

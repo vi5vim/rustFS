@@ -1,9 +1,5 @@
-//! The FUSE glue: a thin translation layer.
-//!
-//! Every method locks the shared state, calls the matching semantic operation
-//! on `FsState` (which lives in `inode.rs`), and turns its `Result` into a
-//! FUSE reply. All the real filesystem logic — and its unit tests — lives in
-//! `inode.rs`; this file only speaks the kernel's protocol.
+//! FUSE glue: each method locks state, calls the matching `FsState` operation
+//! in `inode.rs`, and turns its `Result` into a FUSE reply.
 
 use std::ffi::OsStr;
 use std::sync::Mutex;
@@ -17,10 +13,9 @@ use fuser::{
 
 use crate::inode::FsState;
 
-/// How long the kernel may cache attributes/entries before re-asking us.
+/// Kernel attribute/entry cache lifetime.
 const TTL: Duration = Duration::from_secs(1);
 
-/// Resolve a FUSE `TimeOrNow` (from `setattr`) into a concrete `SystemTime`.
 fn resolve_time(t: TimeOrNow) -> SystemTime {
     match t {
         TimeOrNow::SpecificTime(st) => st,
@@ -28,8 +23,7 @@ fn resolve_time(t: TimeOrNow) -> SystemTime {
     }
 }
 
-/// The filesystem. All state hides behind a `Mutex` so the `&self` FUSE
-/// methods can still mutate it.
+/// State behind a `Mutex` so the `&self` FUSE methods can mutate it.
 pub struct MemFs {
     state: Mutex<FsState>,
 }
@@ -95,10 +89,10 @@ impl Filesystem for MemFs {
                 return;
             }
         };
-        // `offset` is the index to resume from; the value handed back is the *next* index.
+        // `offset` = index to resume from; value handed back = next index.
         for (i, (e_ino, kind, name)) in listing.iter().enumerate().skip(offset as usize) {
             if reply.add(*e_ino, (i + 1) as u64, *kind, name) {
-                break; // kernel buffer full; it will call again with a higher offset.
+                break; // kernel buffer full; it calls again with higher offset
             }
         }
         reply.ok();
@@ -118,7 +112,7 @@ impl Filesystem for MemFs {
     ) {
         let mut st = self.state.lock().unwrap();
         match st.create(parent, &name.to_string_lossy(), (mode & 0o7777) as u16) {
-            // FileHandle(0): we don't track per-open handles yet.
+            // FileHandle(0): no per-open handles yet
             Ok(attr) => reply.created(&TTL, &attr, Generation(0), FileHandle(0), FopenFlags::empty()),
             Err(e) => reply.error(e),
         }

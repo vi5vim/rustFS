@@ -1,11 +1,5 @@
-//! rustFS — a user-level filesystem built on FUSE.
-//!
-//! `main.rs` is intentionally thin: parse the mountpoint argument and start
-//! the FUSE session. The data model lives in `inode.rs`; the kernel-facing
-//! operations live in `fs.rs`.
-//!
-//! Run with:      cargo run -- <mountpoint>
-//! Unmount with:  umount <mountpoint>   (macOS)  |  fusermount -u <mountpoint>  (Linux)
+//! rustFS — user-level filesystem on FUSE.
+//! Run: `cargo run -- <mountpoint>`; unmount: `umount <mountpoint>`.
 
 mod fs;
 mod inode;

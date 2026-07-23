@@ -1,56 +1,35 @@
-//! The in-memory data model & filesystem semantics
-//!
-//! This module is deliberately FUSE-protocol-free. It owns what the
-//! filesystem is and definitions
-//! (create, write, unlink, ...), each expressed as a plain method returning
-//! `Result<_, Errno>`. fs.rs translates FUSE
-//! requests into these calls and their results into replies.
-//!
-//! Keeping semantics here means they can be unit-tested without mounting —
-//! see the `tests` module at the bottom.
+//! In-memory data model & filesystem semantics. FUSE-free: each operation is
+//! a plain method returning `Result<_, Errno>`, unit-testable without mounting.
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::SystemTime;
 
 use fuser::{Errno, FileAttr, FileType, INodeNo};
 
-/// A single filesystem object. Files and directories share `attr`
-/// (their metadata) but differ in payload.
 pub struct Inode {
-    /// Metadata: size, kind, permissions, timestamps, etc.
     pub attr: FileAttr,
-    /// Parent directory's inode. Root is its own parent. Used to answer `..`.
+    /// Parent directory. Root is its own parent. Answers `..`.
     pub parent: INodeNo,
-    /// The actual contents.
     pub data: NodeData,
 }
 
-/// The payload of an inode — what distinguishes a file from a directory.
 pub enum NodeData {
-    /// Regular file: raw bytes.
     File(Vec<u8>),
-    /// Directory: maps an entry name -> the child's inode number.
-    /// Excludes `.` and `..`, which are synthesized in `readdir`.
+    /// Entry name -> child inode. `.`/`..` synthesized in `readdir`.
     Dir(BTreeMap<String, INodeNo>),
 }
 
-/// All filesystem state. In `fs.rs` this lives behind a `Mutex`, because
-/// fuser 0.17's trait methods take `&self`.
 pub struct FsState {
-    /// Every live inode, keyed by its number.
     pub inodes: HashMap<INodeNo, Inode>,
-    /// Monotonic allocator for new inode numbers. 1 (root) and 2 (hello.txt)
-    /// are already taken, so we start handing out from 3.
     next_ino: u64,
 }
 
 impl FsState {
-    /// Build a fresh filesystem: a root directory containing one `hello.txt`.
+    /// Fresh filesystem: root (inode 1) containing `hello.txt` (inode 2).
     pub fn new() -> Self {
         let now = SystemTime::now();
         let mut inodes = HashMap::new();
 
-        // Root directory (inode 1), whose single entry is hello.txt (inode 2).
         let mut root_entries = BTreeMap::new();
         root_entries.insert("hello.txt".to_string(), INodeNo(2));
         inodes.insert(
@@ -62,7 +41,6 @@ impl FsState {
             },
         );
 
-        // hello.txt (inode 2).
         let content = b"Hello from rustFS!\n".to_vec();
         inodes.insert(
             INodeNo(2),
@@ -83,29 +61,24 @@ impl FsState {
         FsState { inodes, next_ino: 3 }
     }
 
-    /// Hand out the next unused inode number.
     fn alloc_ino(&mut self) -> INodeNo {
         let ino = INodeNo(self.next_ino);
         self.next_ino += 1;
         ino
     }
 
-    // ------------------------------------------------------------------
-    // Read operations
-    // ------------------------------------------------------------------
+    // ---- read operations ----
 
-    /// Attributes for a single inode (the FS-level `stat`).
     pub fn getattr(&self, ino: INodeNo) -> Result<FileAttr, Errno> {
         self.inodes.get(&ino).map(|i| i.attr).ok_or(Errno::ENOENT)
     }
 
-    /// Resolve a name inside `parent` to the child's attributes.
     pub fn lookup(&self, parent: INodeNo, name: &str) -> Result<FileAttr, Errno> {
         let ino = self.dir_map(parent)?.get(name).copied().ok_or(Errno::ENOENT)?;
         self.getattr(ino)
     }
 
-    /// Full directory listing: `.`, `..`, then each child (with its real kind).
+    /// Listing: `.`, `..`, then each child.
     pub fn readdir(&self, ino: INodeNo) -> Result<Vec<(INodeNo, FileType, String)>, Errno> {
         let inode = self.inodes.get(&ino).ok_or(Errno::ENOENT)?;
         let entries = match &inode.data {
@@ -127,7 +100,6 @@ impl FsState {
         Ok(out)
     }
 
-    /// Read the byte window `[offset, offset + size)` from a file.
     pub fn read(&self, ino: INodeNo, offset: u64, size: u32) -> Result<Vec<u8>, Errno> {
         match self.inodes.get(&ino) {
             Some(Inode {
@@ -143,22 +115,17 @@ impl FsState {
         }
     }
 
-    // ------------------------------------------------------------------
-    // Write operations
-    // ------------------------------------------------------------------
+    // ---- write operations ----
 
-    /// Create a new, empty regular file in `parent`. Returns its attributes.
     pub fn create(&mut self, parent: INodeNo, name: &str, perm: u16) -> Result<FileAttr, Errno> {
         self.insert_child(parent, name, NodeData::File(Vec::new()), FileType::RegularFile, perm, 1)
     }
 
-    /// Create a new, empty directory in `parent`. Returns its attributes.
     pub fn mkdir(&mut self, parent: INodeNo, name: &str, perm: u16) -> Result<FileAttr, Errno> {
         self.insert_child(parent, name, NodeData::Dir(BTreeMap::new()), FileType::Directory, perm, 2)
     }
 
     /// Write `data` at `offset`, growing (and zero-filling gaps in) the file.
-    /// Returns the number of bytes written (always `data.len()` on success).
     pub fn write(&mut self, ino: INodeNo, offset: u64, data: &[u8]) -> Result<u32, Errno> {
         let inode = self.inodes.get_mut(&ino).ok_or(Errno::ENOENT)?;
         let buf = match &mut inode.data {
@@ -168,7 +135,7 @@ impl FsState {
         let start = offset as usize;
         let end = start + data.len();
         if buf.len() < end {
-            buf.resize(end, 0); // zero-fill any gap between old EOF and `offset`
+            buf.resize(end, 0);
         }
         buf[start..end].copy_from_slice(data);
 
@@ -179,8 +146,7 @@ impl FsState {
         Ok(data.len() as u32)
     }
 
-    /// Apply attribute changes. `size` truncates/extends file contents; the
-    /// rest just update metadata. Returns the resulting attributes.
+    /// Apply attribute changes. `size` truncates/extends file contents.
     pub fn setattr(
         &mut self,
         ino: INodeNo,
@@ -209,14 +175,13 @@ impl FsState {
         Ok(inode.attr)
     }
 
-    /// Remove a (non-directory) file from `parent`.
     pub fn unlink(&mut self, parent: INodeNo, name: &str) -> Result<(), Errno> {
         let ino = self.dir_map(parent)?.get(name).copied().ok_or(Errno::ENOENT)?;
         if matches!(
             self.inodes.get(&ino),
             Some(Inode { data: NodeData::Dir(_), .. })
         ) {
-            return Err(Errno::EISDIR); // directories are rmdir's job
+            return Err(Errno::EISDIR);
         }
         if let Some(Inode { data: NodeData::Dir(entries), .. }) = self.inodes.get_mut(&parent) {
             entries.remove(name);
@@ -225,7 +190,6 @@ impl FsState {
         Ok(())
     }
 
-    /// Remove an *empty* directory from `parent`.
     pub fn rmdir(&mut self, parent: INodeNo, name: &str) -> Result<(), Errno> {
         let ino = self.dir_map(parent)?.get(name).copied().ok_or(Errno::ENOENT)?;
         match self.inodes.get(&ino) {
@@ -237,7 +201,7 @@ impl FsState {
             Some(_) => return Err(Errno::ENOTDIR),
             None => return Err(Errno::ENOENT),
         }
-        // Detach, undo the parent's `..` link bump, then drop the inode.
+        // Detach and undo the parent's `..` link bump.
         if let Some(Inode {
             attr: parent_attr,
             data: NodeData::Dir(entries),
@@ -251,7 +215,6 @@ impl FsState {
         Ok(())
     }
 
-    /// Move/rename an entry, possibly into a different directory.
     pub fn rename(
         &mut self,
         parent: INodeNo,
@@ -259,11 +222,9 @@ impl FsState {
         newparent: INodeNo,
         newname: &str,
     ) -> Result<(), Errno> {
-        // Validate the destination is a directory *first*, so a failure never
-        // leaves the source half-modified (no rollback needed).
+        // Validate destination first so failure never leaves the source half-modified.
         self.dir_map(newparent)?;
 
-        // Detach from the source directory.
         let ino = match self.inodes.get_mut(&parent) {
             Some(Inode { data: NodeData::Dir(entries), .. }) => {
                 entries.remove(name).ok_or(Errno::ENOENT)?
@@ -272,29 +233,26 @@ impl FsState {
             None => return Err(Errno::ENOENT),
         };
 
-        // Attach at the destination, capturing any entry it overwrites.
+        // Attach at destination, capturing any entry it overwrites.
         let replaced = match self.inodes.get_mut(&newparent) {
             Some(Inode { data: NodeData::Dir(entries), .. }) => {
                 entries.insert(newname.to_string(), ino)
             }
-            _ => None, // unreachable: validated as a directory above
+            _ => None, // unreachable: validated above
         };
         if let Some(old) = replaced {
             self.inodes.remove(&old);
         }
 
-        // Repoint the moved inode at its new parent (keeps `..` correct).
+        // Repoint at new parent (keeps `..` correct).
         if let Some(inode) = self.inodes.get_mut(&ino) {
             inode.parent = newparent;
         }
         Ok(())
     }
 
-    // ------------------------------------------------------------------
-    // Internal helpers
-    // ------------------------------------------------------------------
+    // ---- helpers ----
 
-    /// Borrow the directory map of `ino`, or map the failure to an errno.
     fn dir_map(&self, ino: INodeNo) -> Result<&BTreeMap<String, INodeNo>, Errno> {
         match self.inodes.get(&ino) {
             Some(Inode { data: NodeData::Dir(m), .. }) => Ok(m),
@@ -303,8 +261,7 @@ impl FsState {
         }
     }
 
-    /// Shared body of `create`/`mkdir`: validate parent + free name, allocate
-    /// an inode, register it, and link it into the parent.
+    /// Shared body of `create`/`mkdir`.
     fn insert_child(
         &mut self,
         parent: INodeNo,
@@ -337,7 +294,6 @@ impl FsState {
     }
 }
 
-/// Build a `FileAttr`, filling in the fields a toy FS never varies with defaults.
 pub fn mk_attr(
     ino: INodeNo,
     kind: FileType,
@@ -468,12 +424,11 @@ mod tests {
         let mut st = fs();
         let a = st.mkdir(INodeNo::ROOT, "a", 0o755).unwrap();
         let b = st.mkdir(INodeNo::ROOT, "b", 0o755).unwrap();
-        // Move directory `a` to `b/a2`.
         st.rename(INodeNo::ROOT, "a", b.ino, "a2").unwrap();
 
         assert_eq!(st.lookup(INodeNo::ROOT, "a").unwrap_err().code(), libc::ENOENT);
         assert_eq!(st.lookup(b.ino, "a2").unwrap().ino, a.ino);
-        // `a`'s `..` should now resolve to its new parent, `b`.
+        // `..` now resolves to new parent `b`.
         let listing = st.readdir(a.ino).unwrap();
         let dotdot = listing.iter().find(|(_, _, n)| n == "..").unwrap();
         assert_eq!(dotdot.0, b.ino);

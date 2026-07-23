@@ -1,9 +1,9 @@
-//! The in-memory data model *and* the filesystem semantics.
+//! The in-memory data model & filesystem semantics
 //!
-//! This module is deliberately FUSE-protocol-free. It owns *what the
-//! filesystem is* (inodes, their payloads) and *what operations mean*
+//! This module is deliberately FUSE-protocol-free. It owns what the
+//! filesystem is and definitions
 //! (create, write, unlink, ...), each expressed as a plain method returning
-//! `Result<_, Errno>`. The kernel-facing glue in `fs.rs` just translates FUSE
+//! `Result<_, Errno>`. fs.rs translates FUSE
 //! requests into these calls and their results into replies.
 //!
 //! Keeping semantics here means they can be unit-tested without mounting —
